@@ -18,6 +18,7 @@ The minimum Python version supported is 3.8.
 - Winamp
 - `pypresence`
 - `pywin32`
+- `requests`
 
 Any relatively new Winamp version should be fine. Versions starting from 5.0 should be safe.
 
@@ -29,6 +30,25 @@ Any relatively new Winamp version should be fine. Versions starting from 5.0 sho
 
 In case there are some troubles with pywin32 especially after updating Python, running pip upgrade command should 
 solve this: `python -m pip install --upgrade pywin32`.  
+
+## Using Direct URLs for Album Art (Recommended)
+
+Instead of manually uploading album covers to Discord (which has a 300 image limit), you can use direct URLs from Last.FM:
+
+1. Get a free Last.FM API key from [https://www.last.fm/api/account/create](https://www.last.fm/api/account/create)
+2. In `settings.json`:
+   - Set `"use_direct_urls": true`
+   - Add your API key: `"lastfm_api_key": "your_api_key_here"`
+   - Optionally set a `"fallback_image_url"` for when no album art is found
+3. Run the application - album art will be automatically fetched from Last.FM
+
+Benefits:
+- No 300 image limit
+- Automatic album art discovery
+- No manual image management
+- Works with any music in your library
+
+The app will automatically search for album art based on the artist and track information from Winamp.
 
 ## Custom assets
 
