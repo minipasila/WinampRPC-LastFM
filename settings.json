@@ -1,9 +1,12 @@
 {
-  "_comment": "Default_large_asset_text 'winamp version' shows your Winamp version and 'album name' the current playing album",
+  "_comment": "Set use_direct_urls to true to fetch album art from Last.FM. Get your API key from https://www.last.fm/api/account/create",
   "client_id": "default",
+  "use_direct_urls": true,
+  "lastfm_api_key": "YOUR_LASTFM_API_KEY_HERE",
   "default_large_asset_key": "logo",
   "default_large_asset_text": "winamp version",
   "small_asset_key": "playbutton",
   "small_asset_text": "Playing",
-  "custom_assets": false
+  "custom_assets": false,
+  "fallback_image_url": "https://media.minipasila.net/images/Winamp-logo.png"
 }
