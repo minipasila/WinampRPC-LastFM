@@ -25,6 +25,9 @@ SOFTWARE.
 import time
 import os
 import json
+import requests
+import re
+from urllib.parse import quote
 
 from winamp import Winamp, PlayingStatus
 from pypresence import Presence
@@ -49,8 +52,10 @@ def update_rpc():
             pos = 0
         start = now - pos
 
-        # If boolean custom_assets is set true, get the asset key and text from album_covers.json
-        if custom_assets:
+        # Choose between URL-based or custom assets
+        if use_direct_urls:
+            large_asset_key, large_asset_text = get_album_art_url(artist, track_name)
+        elif custom_assets:
             large_asset_key, large_asset_text = get_album_art(track_pos, artist)
         else:
             large_asset_key = "logo"
@@ -61,33 +66,149 @@ def update_rpc():
         cleared = False
 
 
+def get_album_art_url(artist: str, track_name: str):
+    """
+    Fetch album art URL from Last.FM API based on artist and track information.
+    
+    :param artist: The artist name
+    :param track_name: The track name
+    :return: Tuple of (image_url, album_name)
+    """
+    try:
+        # Clean up artist and track names
+        artist_clean = clean_string(artist)
+        track_clean = clean_string(track_name)
+        
+        # First try to get album info from track
+        album_name, image_url = get_album_from_track(artist_clean, track_clean)
+        
+        # If no album found from track, try searching for artist's top albums
+        if not album_name or not image_url:
+            album_name, image_url = get_album_from_artist(artist_clean)
+        
+        # Use the album name as text, or artist name if no album found
+        large_asset_text = album_name if album_name else artist
+        
+        # Fallback to default if no image found
+        if not image_url:
+            image_url = fallback_image_url if fallback_image_url else "logo"
+            
+        if len(large_asset_text) < 2:
+            large_asset_text = f"Album: {large_asset_text}"
+            
+        return image_url, large_asset_text
+        
+    except Exception as e:
+        print(f"Error fetching album art: {e}")
+        return fallback_image_url if fallback_image_url else "logo", artist
+
+
+def clean_string(text: str) -> str:
+    """Clean up artist/track names for API calls"""
+    # Remove common patterns that might interfere with search
+    text = re.sub(r'\(.*?\)', '', text)  # Remove text in parentheses
+    text = re.sub(r'\[.*?\]', '', text)  # Remove text in brackets
+    text = re.sub(r'\s+', ' ', text)     # Replace multiple spaces with single space
+    return text.strip()
+
+
+def get_album_from_track(artist: str, track: str):
+    """Get album info from Last.FM track.getInfo API"""
+    try:
+        url = "http://ws.audioscrobbler.com/2.0/"
+        params = {
+            'method': 'track.getInfo',
+            'api_key': lastfm_api_key,
+            'artist': artist,
+            'track': track,
+            'format': 'json'
+        }
+        
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        
+        if 'track' in data and 'album' in data['track']:
+            album = data['track']['album']
+            album_name = album.get('title', '')
+            
+            # Get the largest available image
+            images = album.get('image', [])
+            image_url = get_largest_image(images)
+            
+            return album_name, image_url
+            
+    except Exception as e:
+        print(f"Error getting album from track: {e}")
+    
+    return None, None
+
+
+def get_album_from_artist(artist: str):
+    """Get top album from artist as fallback"""
+    try:
+        url = "http://ws.audioscrobbler.com/2.0/"
+        params = {
+            'method': 'artist.getTopAlbums',
+            'api_key': lastfm_api_key,
+            'artist': artist,
+            'limit': 1,
+            'format': 'json'
+        }
+        
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        
+        if 'topalbums' in data and 'album' in data['topalbums']:
+            albums = data['topalbums']['album']
+            if albums:
+                # Get first album (most popular)
+                album = albums[0] if isinstance(albums, list) else albums
+                album_name = album.get('name', '')
+                
+                # Get the largest available image
+                images = album.get('image', [])
+                image_url = get_largest_image(images)
+                
+                return album_name, image_url
+                
+    except Exception as e:
+        print(f"Error getting top album from artist: {e}")
+    
+    return None, None
+
+
+def get_largest_image(images):
+    """Extract the largest image URL from Last.FM image array"""
+    if not images:
+        return None
+        
+    # Last.FM provides images in different sizes, get the largest one
+    size_priority = ['extralarge', 'large', 'medium', 'small']
+    
+    for size in size_priority:
+        for img in images:
+            if img.get('size') == size and img.get('#text'):
+                return img['#text']
+    
+    # Fallback to any available image
+    for img in images:
+        if img.get('#text'):
+            return img['#text']
+    
+    return None
+
+
 def get_album_art(track_position: int, artist: str):
     """
-    Dump current playlist into C:\\Users\\username\\Appdata\\Roaming\\Winamp\\Winamp.m3u8. Then read the path of current
-    track from the file and find the album name from it. If album has corresponding album name with key in file
-    album_covers.json, return the asset key and album name. Otherwise return default asset key and text. Also, this
-    function assumes the music directory structure is like artist\\album\\tracks. If the folder structure is something
-    else, the album_name variable may not be the album name and you need to check these manually.
-    This function is used only if custom_assets is set to True and album_covers.json is found.
-
-    :param track_position: Current track's position in the playlist, starting from 0
-    :param artist: Current track's artist. This is needed in case album name is in exceptions i.e. there are multiple
-    albums with same name
-    :return: Album asset key and album name. Asset key in api must be exactly same as this key.
+    Original function for custom Discord assets - kept for backward compatibility
     """
-
     w.dump_playlist()
     appdata_path = os.getenv("APPDATA")
-    # Returns list of paths to every track in playlist which are in format
-    # 'path_to_music_directory\\artist\\album\\track'
     tracklist_paths = w.get_playlist(f"{appdata_path}\\Winamp\\Winamp.m3u8")
-    # Get the current track's directory path
     track_path = os.path.dirname(tracklist_paths[track_position])
-    # Get the tail of the path i.e. the album name
     album_name = os.path.basename(track_path)
 
     large_asset_text = album_name
-    # If there are multiple albums with same name, and they are added into exceptions file, use 'Artist - Album' instead
     if album_name in album_exceptions:
         album_key = f"{artist} - {album_name}"
     else:
@@ -95,7 +216,6 @@ def get_album_art(track_position: int, artist: str):
     try:
         large_asset_key = album_asset_keys[album_key]
     except KeyError:
-        # Could not find asset key for album cover. Use default asset and asset text instead
         large_asset_key = default_large_key
         if default_large_text == "winamp version":
             large_asset_text = f"Winamp v{winamp_version}"
@@ -110,29 +230,35 @@ def get_album_art(track_position: int, artist: str):
     return large_asset_key, large_asset_text
 
 
-# Get the directory where this script was executed to make sure Python can find all files.
+# Get the directory where this script was executed
 main_path = os.path.dirname(__file__)
 
-# Load current settings to a dictionary and assign them to variables. If settings file can't be found, make a new one
-# with default settings.
+# Load settings
 try:
     with open(f"{main_path}\\settings.json") as settings_file:
         settings = json.load(settings_file)
 except FileNotFoundError:
-    settings = {"_comment": "Default_large_asset_text 'winamp version' shows your Winamp version and 'album name' "
-                            "the current playing album",
-                "client_id": "default",
-                "default_large_asset_key": "logo",
-                "default_large_asset_text": "winamp version",
-                "small_asset_key": "playbutton",
-                "small_asset_text": "Playing",
-                "custom_assets": False}
+    settings = {
+        "_comment": "Set use_direct_urls to true to fetch album art from Last.FM. Get your API key from https://www.last.fm/api/account/create",
+        "client_id": "default",
+        "use_direct_urls": True,
+        "lastfm_api_key": "YOUR_LASTFM_API_KEY_HERE",
+        "default_large_asset_key": "logo",
+        "default_large_asset_text": "winamp version",
+        "small_asset_key": "playbutton",
+        "small_asset_text": "Playing",
+        "custom_assets": False,
+        "fallback_image_url": ""
+    }
 
     with open(f"{main_path}\\settings.json", "w") as settings_file:
         json.dump(settings, settings_file, indent=2)
     print("Could not find settings.json. Made new settings file with default values.")
 
 client_id = settings["client_id"]
+use_direct_urls = settings.get("use_direct_urls", False)
+lastfm_api_key = settings.get("lastfm_api_key", "")
+fallback_image_url = settings.get("fallback_image_url", "")
 default_large_key = settings["default_large_asset_key"]
 default_large_text = settings["default_large_asset_text"]
 small_asset_key = settings["small_asset_key"]
@@ -142,6 +268,13 @@ custom_assets = settings["custom_assets"]
 if client_id == "default":
     client_id = "507484022675603456"
 
+# Validate Last.FM API key if using direct URLs
+if use_direct_urls and (not lastfm_api_key or lastfm_api_key == "YOUR_LASTFM_API_KEY_HERE"):
+    print("Warning: use_direct_urls is enabled but no valid Last.FM API key provided.")
+    print("Get your free API key from: https://www.last.fm/api/account/create")
+    print("Falling back to custom assets mode.")
+    use_direct_urls = False
+
 w = Winamp()
 rpc = Presence(client_id)
 rpc.connect()
@@ -150,16 +283,13 @@ winamp_version = w.version
 previous_track = ""
 cleared = False
 
-# If boolean custom_assets is set True, try to load file for album assets and album name exceptions.
-# Files for album cover assets and album name exceptions are loaded only when starting the script so restart is
-# needed when new albums are added
-if custom_assets:
+# Load custom assets files if needed (backward compatibility)
+if custom_assets and not use_direct_urls:
     try:
         with open(f"{main_path}\\album_name_exceptions.txt", "r", encoding="utf8") as exceptions_file:
             album_exceptions = exceptions_file.read().splitlines()
     except FileNotFoundError:
-        print("Could not find album_name_exceptions.txt. Default (or possibly wrong) assets will be used for duplicate "
-              "album names.")
+        print("Could not find album_name_exceptions.txt. Default assets will be used for duplicate album names.")
         album_exceptions = []
     try:
         with open(f"{main_path}\\album_covers.json", encoding="utf8") as data_file:
@@ -168,10 +298,14 @@ if custom_assets:
         print("Could not find album_covers.json. Default assets will be used.")
         custom_assets = False
 
-
 print()
-print("Winamp status is now being updated to Discord (if the Discord activity privacy settings allow this).")
+if use_direct_urls:
+    print("Using direct URLs for album art from Last.FM API.")
+else:
+    print("Using Discord custom assets for album art.")
+print("Winamp status is now being updated to Discord.")
 print("To exit, simply press CTRL + C.")
+
 while True:
     status = w.get_playing_status()
     if status == PlayingStatus.Paused or status == PlayingStatus.Stopped and not cleared:
